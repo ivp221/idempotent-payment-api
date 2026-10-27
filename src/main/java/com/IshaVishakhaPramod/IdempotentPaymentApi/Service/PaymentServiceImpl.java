@@ -1,13 +1,22 @@
 package com.IshaVishakhaPramod.IdempotentPaymentApi.Service;
 
+import com.IshaVishakhaPramod.IdempotentPaymentApi.Dto.MakePaymentRequest;
 import com.IshaVishakhaPramod.IdempotentPaymentApi.Dto.PaymentResponse;
+import com.IshaVishakhaPramod.IdempotentPaymentApi.Entity.Idempotency;
 import com.IshaVishakhaPramod.IdempotentPaymentApi.Entity.Payment;
 import com.IshaVishakhaPramod.IdempotentPaymentApi.Enum.Status;
+import com.IshaVishakhaPramod.IdempotentPaymentApi.Enum.TransactionStatus;
+import com.IshaVishakhaPramod.IdempotentPaymentApi.PaymentRepository.IdempotencyRepo;
 import com.IshaVishakhaPramod.IdempotentPaymentApi.PaymentRepository.PaymentRepo;
+import com.IshaVishakhaPramod.IdempotentPaymentApi.Util.RequestHashUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
+import java.util.Locale;
+import java.util.Optional;
 
 
 import static com.IshaVishakhaPramod.IdempotentPaymentApi.Dto.PaymentResponse.toPaymentResponse;
@@ -24,15 +33,59 @@ import static com.IshaVishakhaPramod.IdempotentPaymentApi.Dto.PaymentResponse.to
 public class PaymentServiceImpl {
     private final PaymentRepo paymentRepo;
     private final FakePaymentProvider fakePaymentProvider;
+    private final IdempotencyRepo idempotencyRepo;
+    private final ObjectMapper objectMapper;
 
-    public PaymentResponse savePayment(Long customerId, BigDecimal amount, String currency){
-        Payment payment = new Payment(customerId,amount,currency);
-        Payment savedPayment = paymentRepo.save(payment);
-        boolean charged = fakePaymentProvider.charge(amount);
-        if (charged){
-            return updateToSuccess(savedPayment.getId());
+
+    public boolean claimPayment(MakePaymentRequest req, String idempotencyKey){
+        String hashNew = RequestHashUtil.sha256(RequestHashUtil.canonicalizeMakePaymentRequest(req));
+        Optional<Idempotency> existing = idempotencyRepo.findByIdempotencyKey(idempotencyKey);
+        if (existing.isPresent()){
+            if (existing.get().getRequestHash().equals(hashNew)){
+                return false;
+            }else{
+                throw new IllegalArgumentException("Different request with same idempotency key");
+            }
         }else {
-            return updateToFailed(savedPayment.getId());
+            Idempotency idempotency = new Idempotency(idempotencyKey, hashNew);
+            idempotencyRepo.saveAndFlush(idempotency);
+            return true;
+        }
+
+
+    }
+    public PaymentResponse savePayment(MakePaymentRequest req, String idempotencyKey){
+        if (!claimPayment(req,idempotencyKey)){
+            Idempotency idem = idempotencyRepo.findByIdempotencyKey(idempotencyKey).get();
+            if (idem.getStatus().equals(TransactionStatus.IN_PROGRESS)){
+                throw new IllegalStateException("Payment Processing");
+            }
+            String existing = idem.getResponseBody();
+            try {
+                return objectMapper.readValue(existing, PaymentResponse.class);
+            } catch (JacksonException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        Payment payment = new Payment(req.getCustomerId(),req.getAmount(),req.getCurrency());
+        Idempotency idem = idempotencyRepo.findByIdempotencyKey(idempotencyKey).get();
+
+        Payment savedPayment = paymentRepo.save(payment);
+
+        boolean charged = fakePaymentProvider.charge(req.getAmount());
+        if (charged){
+
+            PaymentResponse response = updateToSuccess(savedPayment.getId());
+            idem.setResponseBody(objectMapper.writeValueAsString(response));
+            idem.setStatus(TransactionStatus.COMPLETED);
+            idempotencyRepo.saveAndFlush(idem);
+            return response;
+        }else {
+            PaymentResponse response = updateToFailed(savedPayment.getId());
+            idem.setResponseBody(objectMapper.writeValueAsString(response));
+            idem.setStatus(TransactionStatus.COMPLETED);
+            idempotencyRepo.saveAndFlush(idem);
+            return response;
         }
 
     }
