@@ -17,6 +17,8 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -53,6 +55,7 @@ public class PaymentServiceImpl {
             }
         }else {
             Idempotency idempotency = new Idempotency(idempotencyKey, hashNew);
+            idempotency.setExpiresAt(Instant.now().plus(Duration.ofHours(24)));
             try {
                 idempotencyRepo.saveAndFlush(idempotency);
             } catch (DataIntegrityViolationException e) {
@@ -93,13 +96,12 @@ public class PaymentServiceImpl {
 
         boolean charged = fakePaymentProvider.charge(req.getAmount());
         if (charged){
-
             PaymentResponse response = updateToSuccess(savedPayment.getId());
             idem.setResponseBody(objectMapper.writeValueAsString(response));
             idem.setStatus(TransactionStatus.COMPLETED);
             idempotencyRepo.saveAndFlush(idem);
             return response;
-        }else {
+        }else{
             PaymentResponse response = updateToFailed(savedPayment.getId());
             idem.setResponseBody(objectMapper.writeValueAsString(response));
             idem.setStatus(TransactionStatus.COMPLETED);
@@ -119,9 +121,6 @@ public class PaymentServiceImpl {
         }else{
             throw new IllegalArgumentException("Illegal Argument Status (Enter SUCCESS or FAILED) . You entered : " + status );
         }
-
-
-
         Payment updatedPayment = paymentRepo.save(p);
         return toPaymentResponse(updatedPayment);
 
@@ -132,9 +131,6 @@ public class PaymentServiceImpl {
     public PaymentResponse updateToFailed(Long id){
         return updateStatus(id, Status.FAILED);
     }
-
-
-
 
 
 }

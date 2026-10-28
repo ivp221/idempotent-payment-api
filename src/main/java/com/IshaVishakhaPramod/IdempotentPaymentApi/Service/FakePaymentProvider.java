@@ -7,6 +7,6 @@ import java.math.BigDecimal;
 @Component
 public class FakePaymentProvider {
     public boolean charge(BigDecimal amount){
-        return true;
+        return false;
     }
 }

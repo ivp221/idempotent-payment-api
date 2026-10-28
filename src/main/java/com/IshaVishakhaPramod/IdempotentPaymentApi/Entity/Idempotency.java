@@ -35,6 +35,9 @@ public class Idempotency {
     @Column(name = "created_at", nullable = false,updatable = false)
     private Instant createdAt;
 
+    @Column(name = "expires_at", nullable = false, updatable = false)
+    private Instant expiresAt;
+
     public Idempotency(String idempotencyKey, String requestHash){
         this.idempotencyKey = idempotencyKey;
         this.requestHash = requestHash;
