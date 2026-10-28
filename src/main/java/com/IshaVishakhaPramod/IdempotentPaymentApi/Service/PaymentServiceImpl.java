@@ -10,7 +10,9 @@ import com.IshaVishakhaPramod.IdempotentPaymentApi.PaymentRepository.Idempotency
 import com.IshaVishakhaPramod.IdempotentPaymentApi.PaymentRepository.PaymentRepo;
 import com.IshaVishakhaPramod.IdempotentPaymentApi.Util.RequestHashUtil;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
@@ -38,6 +40,9 @@ public class PaymentServiceImpl {
 
 
     public boolean claimPayment(MakePaymentRequest req, String idempotencyKey){
+        System.out.println("Claim Payment Is Called");
+
+
         String hashNew = RequestHashUtil.sha256(RequestHashUtil.canonicalizeMakePaymentRequest(req));
         Optional<Idempotency> existing = idempotencyRepo.findByIdempotencyKey(idempotencyKey);
         if (existing.isPresent()){
@@ -48,12 +53,26 @@ public class PaymentServiceImpl {
             }
         }else {
             Idempotency idempotency = new Idempotency(idempotencyKey, hashNew);
-            idempotencyRepo.saveAndFlush(idempotency);
+            try {
+                idempotencyRepo.saveAndFlush(idempotency);
+            } catch (DataIntegrityViolationException e) {
+                System.out.println("DUPLICATE CLAIM: " + idempotencyKey);
+                Optional<Idempotency> result = idempotencyRepo.findByIdempotencyKey(idempotencyKey);
+                if (result.isEmpty()){
+                    System.out.println("No existing record found after insert failure");
+                }
+                Idempotency existingRecord = result.get();
+                if (existingRecord.getRequestHash().equals(hashNew)) {
+                    return false;
+                }
+                throw new IllegalArgumentException("Different Request with same idempotency key");
+            }
             return true;
         }
 
 
     }
+    @Transactional
     public PaymentResponse savePayment(MakePaymentRequest req, String idempotencyKey){
         if (!claimPayment(req,idempotencyKey)){
             Idempotency idem = idempotencyRepo.findByIdempotencyKey(idempotencyKey).get();
